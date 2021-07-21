@@ -174,3 +174,155 @@ def Lyapunov_Exponet_full_process(data, cycle_dim):
     print("Long-term Lyapunov Exponent: {}".format(long_term_LE[0]))
 
     return short_term_LE, long_term_LE
+
+
+def reconstruct_multidim(x, dim=1, tau=1):
+    for i, tar in enumerate(x):
+        if i == 0:
+            y = utils.reconstruct(tar, dim, tau)
+        else:
+            y = np.concatenate([y, utils.reconstruct(tar, dim, tau)], axis=1)
+    return y
+
+
+def _fnn_multidim(d, x, tau=1, R=17.0, A=2.0, metric='euclidean', window=10, maxnum=None):
+    y1 = reconstruct_multidim(x[:, :-tau], d, tau)
+    y2 = reconstruct_multidim(x, d + 1, tau)
+
+    index, dist = utils.neighbors(y1, metric=metric, window=window,
+                                  maxnum=maxnum)
+
+    f1 = np.abs(y2[:, -1] - y2[index, -1]) / dist > R
+    f2 = utils.dist(y2, y2[index], metric=metric) / np.std(x) > A
+    f3 = f1 | f2
+
+    return np.mean(f1), np.mean(f2), np.mean(f3)
+
+
+def fnn_multidim(x, dim=[1], tau=1, R=17.0, A=2.0, metric='euclidean', window=10, maxnum=None, parallel=True):
+    if parallel:
+        processes = None
+    else:
+        processes = 1
+
+    return utils.parallel_map(_fnn_multidim, dim, (x,), {
+                              'tau': tau,
+                              'R': R,
+                              'A': A,
+                              'metric': metric,
+                              'window': window,
+                              'maxnum': maxnum
+                              }, processes).T
+
+
+def mle(y, maxt=500, window=10, metric='euclidean', maxnum=None):
+    index, dist = utils.neighbors(y, metric=metric, window=window, maxnum=maxnum)
+    m = len(y)
+    maxt = min(m - window - 1, maxt)
+
+    d = np.empty(maxt)
+    d[0] = np.mean(np.log(dist))
+
+    for t in range(1, maxt):
+        t1 = np.arange(t, m)
+        t2 = index[:-t] + t
+
+        # Sometimes the nearest point would be farther than (m - maxt)
+        # in time.  Such trajectories needs to be omitted.
+        valid = t2 < m
+        t1, t2 = t1[valid], t2[valid]
+
+        d[t] = np.mean(np.log(utils.dist(y[t1], y[t2], metric=metric)))
+
+    return d
+
+
+def mle_embed_multidim(x, dim=[1], tau=1, window=10, maxt=500, metric='euclidean', maxnum=None, parallel=True):
+    if parallel:
+        processes = None
+    else:
+        processes = 1
+
+    yy = [reconstruct_multidim(x, dim=d, tau=tau) for d in dim]
+
+    return utils.parallel_map(mle, yy, kwargs={
+                              'maxt': maxt,
+                              'window': window,
+                              'metric': metric,
+                              'maxnum': maxnum
+                              }, processes=processes)
+
+
+def Lyapunov_Exponet_full_process_multidim(data, cycle_dim):
+    first_minimums = []
+
+    for tar in data:
+        mi = delay.dmi(tar, maxtau = cycle_dim*3, bins=int((len(tar)/5)**0.5))
+
+        plt.figure()
+        plt.plot(mi)
+        plt.title('Delayed mutual information')
+        plt.xlabel('time delay')
+        plt.ylabel('Mutual Information')
+        plt.show()
+
+        for i in range(100):
+            if mi[i-1] > mi[i] and mi[i] < mi[i+1]:
+                tau = i
+                first_minimums.append(tau)
+                print("first minimum of AMI:", tau)
+                break
+
+    tau = int(sum(first_minimums)/len(first_minimums))
+    print("Time delay(tau): ", tau)
+
+
+    dim = np.arange(1, 15+1)
+    f1, f2, f3 = fnn_multidim(data, dim=dim, tau=tau)    
+
+    plt.figure()
+    plt.xlabel(r'Embedding dimension $d$')
+    plt.ylabel(r'FNN (%)')
+    plt.plot(dim, 100 * f1, 'bo--', label=r'Test I')
+    plt.plot(dim, 100 * f2, 'g^--', label=r'Test II')
+    plt.plot(dim, 100 * f3, 'rs-', label=r'Test I or II')
+    plt.legend()
+    plt.show()
+
+    for i in range(1, 15+1):
+        if f3[i-1] == 0:
+            embedding_dim = i
+            print("embedding dimension:", embedding_dim)
+            break
+    else:
+        print("Error: GFNN doesn't converge to 0 until dimension 15")
+        #return 'Error', 'Error'
+
+    embedding_dim = 8
+
+    d = mle_embed_multidim(data, dim=[embedding_dim], tau=tau, maxt=cycle_dim*10)
+    t = np.arange(cycle_dim*10).reshape(-1, 1)
+
+    short_term = LinearRegression()
+    short_term.fit(t[:cycle_dim]/cycle_dim, d[0, :cycle_dim])
+    short_term_LE = short_term.coef_
+
+    long_term = LinearRegression() 
+    long_term.fit(t[cycle_dim*4:]/cycle_dim, d[0, cycle_dim*4:])
+    long_term_LE = long_term.coef_
+
+    plt.figure()
+    plt.xlabel(r'Steps #')
+    plt.ylabel(r'Average divergence $\langle d_i(t) \rangle$')
+    plt.plot(t/cycle_dim, d[0])
+    plt.plot(t[:cycle_dim]/cycle_dim, short_term.predict(t[:cycle_dim]/cycle_dim))
+    plt.plot(t[cycle_dim*4:]/cycle_dim, long_term.predict(t[cycle_dim*4:]/cycle_dim))
+
+    plt.show()
+
+    print("Short-term Lyapunov Exponent: {}".format(short_term_LE[0]))
+    print("Long-term Lyapunov Exponent: {}".format(long_term_LE[0]))
+
+    return short_term_LE, long_term_LE
+
+
