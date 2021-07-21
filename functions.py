@@ -296,10 +296,9 @@ def Lyapunov_Exponet_full_process_multidim(data, cycle_dim):
             break
     else:
         print("Error: GFNN doesn't converge to 0 until dimension 15")
-        #return 'Error', 'Error'
+        return 'Error', 'Error'
 
-    embedding_dim = 8
-
+        
     d = mle_embed_multidim(data, dim=[embedding_dim], tau=tau, maxt=cycle_dim*10)
     t = np.arange(cycle_dim*10).reshape(-1, 1)
 
